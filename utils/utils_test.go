@@ -129,6 +129,20 @@ func TestStringUtils(t *testing.T) {
 		}
 	})
 
+	t.Run("MaskKey and MaskSecret", func(t *testing.T) {
+		key := "rzp_test_1234567890abcdef"
+		maskedKey := MaskKey(key)
+		if maskedKey != "rzp_test_********cdef" {
+			t.Errorf("unexpected masked key: %s", maskedKey)
+		}
+
+		secret := "secretKey12345678"
+		maskedSecret := MaskSecret(secret)
+		if maskedSecret != "********5678" {
+			t.Errorf("unexpected masked secret: %s", maskedSecret)
+		}
+	})
+
 	t.Run("RandomString", func(t *testing.T) {
 		s := RandomString(16)
 		if len(s) != 16 {

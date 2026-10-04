@@ -113,3 +113,36 @@ func ToSnakeCase(s string) string {
 	}
 	return string(res)
 }
+
+// MaskKey masks an API key, preserving standard prefixes (e.g. rzp_live_, rzp_test_, sk_live_, sk_test_) and the last 4 characters.
+// Example: "rzp_test_1234567890abcdef" -> "rzp_test_********cdef"
+func MaskKey(key string) string {
+	if len(key) <= 8 {
+		return "********"
+	}
+
+	prefix := ""
+	for _, p := range []string{"rzp_live_", "rzp_test_", "sk_live_", "sk_test_", "pk_live_", "pk_test_"} {
+		if strings.HasPrefix(key, p) {
+			prefix = p
+			key = key[len(p):]
+			break
+		}
+	}
+
+	if len(key) <= 4 {
+		return prefix + "****"
+	}
+	return prefix + "********" + key[len(key)-4:]
+}
+
+// MaskSecret masks a secret key, keeping only the last 4 characters visible so users can identify credentials.
+// Example: "secret12345678" -> "********5678"
+func MaskSecret(secret string) string {
+	secret = strings.TrimSpace(secret)
+	if len(secret) <= 4 {
+		return "********"
+	}
+	return "********" + secret[len(secret)-4:]
+}
+

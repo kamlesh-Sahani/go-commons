@@ -39,4 +39,26 @@ func TestCryptoHelpers(t *testing.T) {
 			t.Errorf("expected %s, got %s", plainText, decrypted)
 		}
 	})
+
+	t.Run("Argon2id hashing and verification", func(t *testing.T) {
+		pwd := "SuperSecretPassword#2026"
+		h, err := HashArgon2id(pwd)
+		if err != nil {
+			t.Fatalf("failed to hash with Argon2id: %v", err)
+		}
+
+		if err := VerifyArgon2id(pwd, h); err != nil {
+			t.Errorf("expected valid password verification, got: %v", err)
+		}
+
+		if err := VerifyArgon2id("incorrectPassword", h); err == nil {
+			t.Errorf("expected incorrect password to fail")
+		}
+
+		randPwd := GenerateRandomPassword(16)
+		if len(randPwd) != 16 {
+			t.Errorf("expected random password of length 16, got %d", len(randPwd))
+		}
+	})
 }
+
