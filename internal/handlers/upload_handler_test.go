@@ -9,7 +9,7 @@ import (
 	"testing"
 
 	"github.com/gin-gonic/gin"
-	"github.com/kamlesh-dev/go-common/middleware"
+	"github.com/kamlesh-Sahani/go-commons/middleware"
 )
 
 func init() {

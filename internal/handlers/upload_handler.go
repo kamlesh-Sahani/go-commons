@@ -9,9 +9,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kamlesh-dev/go-common/internal/storage"
-	"github.com/kamlesh-dev/go-common/middleware"
-	"github.com/kamlesh-dev/go-common/response"
+	"github.com/kamlesh-Sahani/go-commons/internal/storage"
+	"github.com/kamlesh-Sahani/go-commons/middleware"
+	"github.com/kamlesh-Sahani/go-commons/response"
 	"github.com/gin-gonic/gin"
 )
 

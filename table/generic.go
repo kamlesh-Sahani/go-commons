@@ -6,7 +6,7 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
-	"github.com/kamlesh-dev/go-common/response"
+	"github.com/kamlesh-Sahani/go-commons/response"
 	"golang.org/x/text/cases"
 	"golang.org/x/text/language"
 )

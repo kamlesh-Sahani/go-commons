@@ -4,7 +4,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/kamlesh-dev/go-common/response"
+	"github.com/kamlesh-Sahani/go-commons/response"
 	"github.com/gin-gonic/gin"
 )
 

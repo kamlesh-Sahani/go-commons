@@ -6,11 +6,11 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/kamlesh-dev/go-common/crypto"
-	"github.com/kamlesh-dev/go-common/middleware"
-	"github.com/kamlesh-dev/go-common/response"
-	"github.com/kamlesh-dev/go-common/sdk"
-	"github.com/kamlesh-dev/go-common/table"
+	"github.com/kamlesh-Sahani/go-commons/crypto"
+	"github.com/kamlesh-Sahani/go-commons/middleware"
+	"github.com/kamlesh-Sahani/go-commons/response"
+	"github.com/kamlesh-Sahani/go-commons/sdk"
+	"github.com/kamlesh-Sahani/go-commons/table"
 )
 
 type Company struct {

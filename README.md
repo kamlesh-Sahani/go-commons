@@ -1,6 +1,6 @@
-# 🚀 Go Common (`github.com/kamlesh-dev/go-common`)
+# 🚀 Go Common (`github.com/kamlesh-Sahani/go-commons`)
 
-> A production-ready Go toolkit and microservice for multi-project architectures. Use it as an importable Go package in your backends (`go get github.com/kamlesh-dev/go-common`) or run it as a standalone file upload microservice.
+> A production-ready Go toolkit and microservice for multi-project architectures. Use it as an importable Go package in your backends (`go get github.com/kamlesh-Sahani/go-commons`) or run it as a standalone file upload microservice.
 
 [![Go Version](https://img.shields.io/badge/go-1.25+-blue.svg)](https://golang.org)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
@@ -26,7 +26,7 @@
 In your backend project (e.g. `billing-management` or `inventory_and_accounting`):
 
 ```bash
-go get github.com/kamlesh-dev/go-common
+go get github.com/kamlesh-Sahani/go-commons
 ```
 
 ---
@@ -190,7 +190,7 @@ import (
 	"context"
 	"database/sql"
 	"github.com/gin-gonic/gin"
-	"github.com/kamlesh-dev/go-common/table"
+	"github.com/kamlesh-Sahani/go-commons/table"
 )
 
 type Company struct {
@@ -270,7 +270,7 @@ package controllers
 import (
 	"time"
 	"github.com/gin-gonic/gin"
-	"github.com/kamlesh-dev/go-common/table"
+	"github.com/kamlesh-Sahani/go-commons/table"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
@@ -377,7 +377,7 @@ Construct rich, semantic table cells directly from the backend:
 Never write repetitive `c.JSON(http.StatusOK, gin.H{"success": true, ...})` again:
 
 ```go
-import "github.com/kamlesh-dev/go-common/response"
+import "github.com/kamlesh-Sahani/go-commons/response"
 
 // 200 OK
 response.Success(c, "Companies fetched successfully", companies)
@@ -415,7 +415,7 @@ All responses follow a clean, consistent JSON envelope:
 Includes pre-registered Gin validation and human-friendly error messages:
 
 ```go
-import "github.com/kamlesh-dev/go-common/utils"
+import "github.com/kamlesh-Sahani/go-commons/utils"
 
 type SignupRequest struct {
     Name  string `json:"name" binding:"required,notblank"` // Rejects spaces-only like "   "
@@ -458,7 +458,7 @@ utils.TimeAgo(time.Now().Add(-2*time.Hour)) // "2 hours ago"
 When a user uploads a file (e.g. invoice PDF, product picture, avatar), your backend communicates with the hosted upload service using the client SDK:
 
 ```go
-import "github.com/kamlesh-dev/go-common/sdk"
+import "github.com/kamlesh-Sahani/go-commons/sdk"
 
 // 1. Initialize client once
 var uploadClient = sdk.NewClient("https://upload-api.yourcompany.com", "your_secret_api_key")
@@ -500,7 +500,7 @@ func SaveInvoice(c *gin.Context) {
 Drop-in middlewares for Gin routers:
 
 ```go
-import "github.com/kamlesh-dev/go-common/middleware"
+import "github.com/kamlesh-Sahani/go-commons/middleware"
 
 router := gin.New()
 
@@ -515,7 +515,7 @@ router.Use(middleware.RateLimiter(100, time.Second)) // 100 requests/sec sliding
 ### 6. 🔐 Password Hashing & Encryption (`crypto`)
 
 ```go
-import "github.com/kamlesh-dev/go-common/crypto"
+import "github.com/kamlesh-Sahani/go-commons/crypto"
 
 // 1. Bcrypt Password Hashing
 hashedPassword, _ := crypto.HashPassword("mySuperSecretPassword")
@@ -537,7 +537,7 @@ token, _ := crypto.GenerateRandomHex(32) // 64-character secure random hex
 Thread-safe message publishing and resilient background workers with automatic Ack/Nack:
 
 ```go
-import "github.com/kamlesh-dev/go-common/queue"
+import "github.com/kamlesh-Sahani/go-commons/queue"
 
 // 1. Connect
 rmq, err := queue.NewRabbitClient("amqp://guest:guest@localhost:5672/")
@@ -607,7 +607,7 @@ docker compose up -d
 ## 🔒 Security Architecture
 
 ```
-github.com/kamlesh-dev/go-common
+github.com/kamlesh-Sahani/go-commons
 ├── internal/                 🔒 PRIVATE TO SERVER (Cannot be imported outside!)
 │   ├── storage/              # Master S3 credentials, presigning logic
 │   ├── handlers/             # Server HTTP controllers
