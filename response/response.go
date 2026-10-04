@@ -64,6 +64,11 @@ func Conflict(c *gin.Context, message string) {
 	RespondJSON(c, http.StatusConflict, false, message, nil)
 }
 
+// PaymentRequired sends a 402 Payment Required error response.
+func PaymentRequired(c *gin.Context, message string) {
+	RespondJSON(c, http.StatusPaymentRequired, false, message, nil)
+}
+
 // InternalServerError sends a 500 Internal Server Error response.
 func InternalServerError(c *gin.Context, message string) {
 	if message == "" {
