@@ -7,10 +7,8 @@ import (
 	"mime/multipart"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
@@ -18,31 +16,12 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/gin-gonic/gin"
-	"github.com/google/uuid"
 )
-
-// Options configures file upload behavior.
-type Options struct {
-	Folder       string   // Target directory (e.g. "invoices"). Default: "uploads"
-	FieldName    string   // Form field name. Default: "file"
-	MaxSizeMB    int64    // Max size in MB. Default: 50MB
-	AllowedTypes []string // e.g. []string{"image/png", ".pdf", "jpg"}
-	TenantID     string   // Optional project/tenant ID for path scoping
-}
-
-// File represents a saved file.
-type File struct {
-	Name string `json:"name"`
-	URL  string `json:"url"`
-	Key  string `json:"key"`
-	Size int64  `json:"size"`
-}
 
 var (
 	s3InitOnce sync.Once
 	s3Client   *s3.Client
 	s3Bucket   string
-	safeNameRe = regexp.MustCompile(`[^a-zA-Z0-9._-]`)
 )
 
 // Save reads uploaded files from the request, validates them, saves them, and returns an array of File.
@@ -255,61 +234,6 @@ func getFiles(c *gin.Context, field string) []*multipart.FileHeader {
 		return files
 	}
 	return nil
-}
-
-func cleanFileName(name string) string {
-	base := filepath.Base(name)
-	ext := filepath.Ext(base)
-	nameOnly := strings.TrimSuffix(base, ext)
-
-	safe := safeNameRe.ReplaceAllString(nameOnly, "_")
-	if len(safe) > 50 {
-		safe = safe[:50]
-	}
-	if safe == "" {
-		safe = "file"
-	}
-	return safe + strings.ToLower(ext)
-}
-
-func buildKey(tenant, folder, filename string) string {
-	cleanFolder := safeNameRe.ReplaceAllString(strings.TrimSpace(folder), "-")
-	if cleanFolder == "" {
-		cleanFolder = "uploads"
-	}
-	now := time.Now().UTC()
-	uid := uuid.New().String()[:8] // Short unique collision prefix
-
-	if tenant = strings.TrimSpace(tenant); tenant != "" {
-		cleanTenant := safeNameRe.ReplaceAllString(tenant, "-")
-		return fmt.Sprintf("projects/%s/%s/%s/%s/%s_%s", cleanTenant, cleanFolder, now.Format("2006"), now.Format("01"), uid, filename)
-	}
-	return fmt.Sprintf("%s/%s/%s/%s_%s", cleanFolder, now.Format("2006"), now.Format("01"), uid, filename)
-}
-
-func isBlocked(ext string) bool {
-	blocked := map[string]bool{
-		".exe": true, ".bat": true, ".sh": true, ".php": true, ".py": true,
-		".rb": true, ".js": true, ".html": true, ".htm": true, ".svg": true,
-		".cmd": true, ".dll": true, ".so": true,
-	}
-	return blocked[ext]
-}
-
-func isAllowed(filename, ctype string, allowed []string) bool {
-	ext := strings.ToLower(filepath.Ext(filename))
-	normMime := strings.ToLower(strings.TrimSpace(ctype))
-
-	for _, a := range allowed {
-		a = strings.ToLower(strings.TrimSpace(a))
-		if a == ext || "."+a == ext || a == normMime {
-			return true
-		}
-		if strings.HasSuffix(a, "/*") && strings.HasPrefix(normMime, strings.TrimSuffix(a, "/*")+"/") {
-			return true
-		}
-	}
-	return false
 }
 
 func getLocalDir() string {
