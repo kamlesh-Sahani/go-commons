@@ -65,12 +65,6 @@ func Save(c *gin.Context, opt ...Options) ([]*File, error) {
 		opts.AllowedTypes = opt[0].AllowedTypes
 		opts.TenantID = opt[0].TenantID
 	}
-	if opts.TenantID == "" {
-		opts.TenantID = c.GetString("tenant_id")
-		if opts.TenantID == "" {
-			opts.TenantID = c.GetString("project_id")
-		}
-	}
 
 	_ = c.Request.ParseMultipartForm(32 * 1024 * 1024)
 	headers := getFiles(c, opts.FieldName)

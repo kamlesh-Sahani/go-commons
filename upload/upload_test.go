@@ -122,9 +122,9 @@ func TestUploadSave_TenantScoping(t *testing.T) {
 
 	var savedFiles []*upload.File
 	r.POST("/upload", func(c *gin.Context) {
-		c.Set("tenant_id", "billing-corp")
 		savedFiles, _ = upload.Save(c, upload.Options{
-			Folder: "reports",
+			Folder:   "reports",
+			TenantID: "billing-corp",
 		})
 		c.Status(http.StatusOK)
 	})
