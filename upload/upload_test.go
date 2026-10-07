@@ -167,6 +167,38 @@ func TestUploadSave_RejectsBlockedExtensions(t *testing.T) {
 	}
 }
 
+func TestUploadSave_RejectsBlockedMIMEType(t *testing.T) {
+	r, tmpDir := setupTestRouter()
+	defer os.RemoveAll(tmpDir)
+
+	var saveErr error
+	r.POST("/upload", func(c *gin.Context) {
+		_, saveErr = upload.Save(c)
+		c.Status(http.StatusOK)
+	})
+
+	body := &bytes.Buffer{}
+	writer := multipart.NewWriter(body)
+	h := make(map[string][]string)
+	h["Content-Disposition"] = []string{`form-data; name="file"; filename="page.custom"`}
+	h["Content-Type"] = []string{"text/html"}
+	part, _ := writer.CreatePart(h)
+	_, _ = part.Write([]byte("<html><script>alert(1)</script></html>"))
+	_ = writer.Close()
+
+	req := httptest.NewRequest("POST", "/upload", body)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if saveErr == nil {
+		t.Fatalf("expected error for text/html MIME type, got nil")
+	}
+	if !strings.Contains(saveErr.Error(), "not allowed for security") {
+		t.Errorf("unexpected error message: %v", saveErr)
+	}
+}
+
 func TestUploadSave_RejectsOversizedFile(t *testing.T) {
 	r, tmpDir := setupTestRouter()
 	defer os.RemoveAll(tmpDir)

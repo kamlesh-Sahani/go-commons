@@ -62,8 +62,8 @@ func Save(c *gin.Context, opt ...Options) ([]*File, error) {
 		cleanName := cleanFileName(fh.Filename)
 		ext := strings.ToLower(filepath.Ext(cleanName))
 
-		// Block dangerous script/executable extensions
-		if isBlocked(ext) {
+		// Block dangerous script/executable extensions and MIME types
+		if isBlocked(ext, fh.Header.Get("Content-Type")) {
 			return nil, fmt.Errorf("upload: file '%s' is not allowed for security reasons", fh.Filename)
 		}
 

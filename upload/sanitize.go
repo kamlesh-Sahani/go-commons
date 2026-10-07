@@ -12,6 +12,48 @@ import (
 
 var safeNameRe = regexp.MustCompile(`[^a-zA-Z0-9._-]`)
 
+var blockedExtensions = map[string]bool{
+	".exe":   true,
+	".bat":   true,
+	".cmd":   true,
+	".sh":    true,
+	".bash":  true,
+	".php":   true,
+	".phtml": true,
+	".py":    true,
+	".rb":    true,
+	".pl":    true,
+	".cgi":   true,
+	".jar":   true,
+	".vbs":   true,
+	".js":    true,
+	".mjs":   true,
+	".html":  true,
+	".htm":   true,
+	".xhtml": true,
+	".svg":   true,
+	".msi":   true,
+	".dll":   true,
+	".so":    true,
+	".dylib": true,
+	".com":   true,
+	".scr":   true,
+}
+
+var blockedMIMETypes = map[string]bool{
+	"text/html":                true,
+	"application/xhtml+xml":    true,
+	"application/javascript":   true,
+	"text/javascript":          true,
+	"image/svg+xml":            true,
+	"application/x-msdownload": true,
+	"application/x-sh":         true,
+	"application/x-executable": true,
+	"application/x-bat":        true,
+	"application/x-php":        true,
+	"text/x-php":               true,
+}
+
 func cleanFileName(name string) string {
 	base := filepath.Base(name)
 	ext := filepath.Ext(base)
@@ -42,13 +84,18 @@ func buildKey(tenant, folder, filename string) string {
 	return fmt.Sprintf("%s/%s/%s/%s_%s", cleanFolder, now.Format("2006"), now.Format("01"), uid, filename)
 }
 
-func isBlocked(ext string) bool {
-	blocked := map[string]bool{
-		".exe": true, ".bat": true, ".sh": true, ".php": true, ".py": true,
-		".rb": true, ".js": true, ".html": true, ".htm": true, ".svg": true,
-		".cmd": true, ".dll": true, ".so": true,
+func isBlocked(ext, mimeType string) bool {
+	ext = strings.ToLower(strings.TrimSpace(ext))
+	if blockedExtensions[ext] {
+		return true
 	}
-	return blocked[ext]
+
+	normMime := strings.ToLower(strings.TrimSpace(mimeType))
+	if blockedMIMETypes[normMime] {
+		return true
+	}
+
+	return false
 }
 
 func isAllowed(filename, ctype string, allowed []string) bool {
