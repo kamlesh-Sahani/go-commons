@@ -252,3 +252,44 @@ func TestUploadDelete_ArrayOfKeys(t *testing.T) {
 		t.Errorf("expected file2 to be deleted")
 	}
 }
+
+func TestPresign_Validations(t *testing.T) {
+	// Empty filename
+	_, err := upload.Presign(context.Background(), upload.PresignOptions{
+		FileName: "",
+	})
+	if err == nil || !strings.Contains(err.Error(), "filename is required") {
+		t.Errorf("expected filename is required error, got: %v", err)
+	}
+
+	// Blocked executable extension
+	_, err = upload.Presign(context.Background(), upload.PresignOptions{
+		FileName: "script.exe",
+	})
+	if err == nil || !strings.Contains(err.Error(), "security reasons") {
+		t.Errorf("expected security error for .exe, got: %v", err)
+	}
+
+	// Missing S3 configuration error
+	_, err = upload.Presign(context.Background(), upload.PresignOptions{
+		FileName:    "report.pdf",
+		ContentType: "application/pdf",
+	})
+	if err == nil || !strings.Contains(err.Error(), "S3 storage is not configured") {
+		t.Errorf("expected S3 not configured error, got: %v", err)
+	}
+}
+
+func TestVerify_Validations(t *testing.T) {
+	// Empty key
+	_, err := upload.Verify(context.Background(), "")
+	if err == nil || !strings.Contains(err.Error(), "key is required") {
+		t.Errorf("expected key is required error, got: %v", err)
+	}
+
+	// Missing S3 configuration error
+	_, err = upload.Verify(context.Background(), "some/key.pdf")
+	if err == nil || !strings.Contains(err.Error(), "S3 storage is not configured") {
+		t.Errorf("expected S3 not configured error, got: %v", err)
+	}
+}

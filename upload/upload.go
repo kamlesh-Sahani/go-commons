@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
@@ -23,6 +24,93 @@ var (
 	s3Client   *s3.Client
 	s3Bucket   string
 )
+
+// Presign generates an S3 presigned POST URL and form policy fields for direct-to-S3 uploads.
+// Returns an error if AWS_S3_BUCKET is not configured.
+func Presign(ctx context.Context, opts PresignOptions) (*PresignResult, error) {
+	if strings.TrimSpace(opts.FileName) == "" {
+		return nil, fmt.Errorf("upload: filename is required")
+	}
+
+	cleanName := cleanFileName(opts.FileName)
+	ext := strings.ToLower(filepath.Ext(cleanName))
+
+	if isBlocked(ext, opts.ContentType) {
+		return nil, fmt.Errorf("upload: file '%s' is not allowed for security reasons", opts.FileName)
+	}
+
+	client, bucket := getS3()
+	if client == nil || bucket == "" {
+		return nil, fmt.Errorf("upload: S3 storage is not configured (AWS_S3_BUCKET is required for presigned uploads)")
+	}
+
+	key := buildKey(opts.TenantID, opts.Folder, cleanName)
+
+	presignClient := s3.NewPresignClient(client)
+	expires := opts.ExpiresIn
+	if expires <= 0 {
+		expires = 15 * time.Minute
+	}
+
+	cType := opts.ContentType
+	if cType == "" {
+		cType = "application/octet-stream"
+	}
+
+	postReq, err := presignClient.PresignPostObject(ctx, &s3.PutObjectInput{
+		Bucket:      aws.String(bucket),
+		Key:         aws.String(key),
+		ContentType: aws.String(cType),
+	}, func(o *s3.PresignPostOptions) {
+		o.Expires = expires
+	})
+	if err != nil {
+		return nil, fmt.Errorf("upload: presign post error: %w", err)
+	}
+
+	return &PresignResult{
+		URL:    postReq.URL,
+		Fields: postReq.Values,
+		Key:    key,
+	}, nil
+}
+
+// Verify confirms that an uploaded file exists in S3 and returns its metadata.
+func Verify(ctx context.Context, key string) (*VerifyResult, error) {
+	cleanKey := strings.TrimSpace(key)
+	if cleanKey == "" {
+		return nil, fmt.Errorf("upload: key is required")
+	}
+
+	client, bucket := getS3()
+	if client == nil || bucket == "" {
+		return nil, fmt.Errorf("upload: S3 storage is not configured (AWS_S3_BUCKET is required)")
+	}
+
+	head, err := client.HeadObject(ctx, &s3.HeadObjectInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String(cleanKey),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("upload: file not found in S3: %w", err)
+	}
+
+	var size int64
+	if head.ContentLength != nil {
+		size = *head.ContentLength
+	}
+	var cType string
+	if head.ContentType != nil {
+		cType = *head.ContentType
+	}
+
+	return &VerifyResult{
+		Key:         cleanKey,
+		URL:         BuildPublicURL(cleanKey),
+		Size:        size,
+		ContentType: cType,
+	}, nil
+}
 
 // Save reads uploaded files from the request, validates them, saves them, and returns an array of File.
 func Save(c *gin.Context, opt ...Options) ([]*File, error) {
@@ -119,6 +207,25 @@ func Delete(ctx context.Context, keys []string) error {
 	return err
 }
 
+// BuildPublicURL constructs the public URL for a given storage key.
+func BuildPublicURL(key string) string {
+	client, bucket := getS3()
+	if client == nil || bucket == "" {
+		return "/uploads/" + key
+	}
+	if cdn := os.Getenv("PUBLIC_CDN_BASE_URL"); cdn != "" {
+		return strings.TrimRight(cdn, "/") + "/" + key
+	}
+	if ep := os.Getenv("AWS_ENDPOINT"); ep != "" {
+		return fmt.Sprintf("%s/%s/%s", strings.TrimRight(ep, "/"), bucket, key)
+	}
+	region := os.Getenv("AWS_REGION")
+	if region == "" {
+		region = "us-east-1"
+	}
+	return fmt.Sprintf("https://%s.s3.%s.amazonaws.com/%s", bucket, region, key)
+}
+
 // --- Internal Helpers ---
 
 func storeFile(ctx context.Context, fh *multipart.FileHeader, key string) (string, error) {
@@ -130,7 +237,7 @@ func storeFile(ctx context.Context, fh *multipart.FileHeader, key string) (strin
 
 	client, bucket := getS3()
 	if client == nil || bucket == "" {
-		// Save locally if no S3 bucket configured (great for local tests & dev)
+		// Save locally if no S3 bucket configured
 		localDir := getLocalDir()
 		destPath := filepath.Join(localDir, filepath.FromSlash(key))
 		_ = os.MkdirAll(filepath.Dir(destPath), 0755)
@@ -144,7 +251,7 @@ func storeFile(ctx context.Context, fh *multipart.FileHeader, key string) (strin
 		if _, err := io.Copy(dst, src); err != nil {
 			return "", err
 		}
-		return "/uploads/" + key, nil
+		return BuildPublicURL(key), nil
 	}
 
 	// Upload to S3
@@ -164,18 +271,7 @@ func storeFile(ctx context.Context, fh *multipart.FileHeader, key string) (strin
 		return "", fmt.Errorf("upload: s3 upload error: %w", err)
 	}
 
-	if cdn := os.Getenv("PUBLIC_CDN_BASE_URL"); cdn != "" {
-		return strings.TrimRight(cdn, "/") + "/" + key, nil
-	}
-	if ep := os.Getenv("AWS_ENDPOINT"); ep != "" {
-		return fmt.Sprintf("%s/%s/%s", strings.TrimRight(ep, "/"), bucket, key), nil
-	}
-
-	region := os.Getenv("AWS_REGION")
-	if region == "" {
-		region = "us-east-1"
-	}
-	return fmt.Sprintf("https://%s.s3.%s.amazonaws.com/%s", bucket, region, key), nil
+	return BuildPublicURL(key), nil
 }
 
 func getS3() (*s3.Client, string) {
