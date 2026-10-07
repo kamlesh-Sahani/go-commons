@@ -2,38 +2,68 @@ package upload
 
 import (
 	"context"
-	"errors"
 	"fmt"
+	"io"
 	"mime/multipart"
-	"net/http"
+	"os"
+	"path/filepath"
+	"regexp"
+	"strings"
+	"sync"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/credentials"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 )
 
-// Save reads uploaded files from the HTTP request, validates their size and type,
-// stores them using the configured storage driver, and returns an array of File structs.
-// If 1 file was uploaded, an array of 1 element is returned. If multiple files were uploaded,
-// all of them are saved and returned.
-func Save(c *gin.Context, optList ...Options) ([]*File, error) {
+// Options configures file upload behavior.
+type Options struct {
+	Folder       string   // Target directory (e.g. "invoices"). Default: "uploads"
+	FieldName    string   // Form field name. Default: "file"
+	MaxSizeMB    int64    // Max size in MB. Default: 50MB
+	AllowedTypes []string // e.g. []string{"image/png", ".pdf", "jpg"}
+	TenantID     string   // Optional project/tenant ID for path scoping
+}
+
+// File represents a saved file.
+type File struct {
+	Name string `json:"name"`
+	URL  string `json:"url"`
+	Key  string `json:"key"`
+	Size int64  `json:"size"`
+}
+
+var (
+	s3InitOnce sync.Once
+	s3Client   *s3.Client
+	s3Bucket   string
+	safeNameRe = regexp.MustCompile(`[^a-zA-Z0-9._-]`)
+)
+
+// Save reads uploaded files from the request, validates them, saves them, and returns an array of File.
+func Save(c *gin.Context, opt ...Options) ([]*File, error) {
 	if c == nil || c.Request == nil {
-		return nil, errors.New("upload: invalid gin context or nil request")
+		return nil, fmt.Errorf("upload: invalid gin request")
 	}
 
-	opts := Options{}
-	if len(optList) > 0 {
-		opts = optList[0]
-	}
-
-	// Apply defaults
-	if opts.Folder == "" {
-		opts.Folder = "uploads"
-	}
-	if opts.FieldName == "" {
-		opts.FieldName = "file"
-	}
-	if opts.MaxSizeMB <= 0 {
-		opts.MaxSizeMB = 50
+	opts := Options{Folder: "uploads", FieldName: "file", MaxSizeMB: 50}
+	if len(opt) > 0 {
+		if opt[0].Folder != "" {
+			opts.Folder = opt[0].Folder
+		}
+		if opt[0].FieldName != "" {
+			opts.FieldName = opt[0].FieldName
+		}
+		if opt[0].MaxSizeMB > 0 {
+			opts.MaxSizeMB = opt[0].MaxSizeMB
+		}
+		opts.AllowedTypes = opt[0].AllowedTypes
+		opts.TenantID = opt[0].TenantID
 	}
 	if opts.TenantID == "" {
 		opts.TenantID = c.GetString("tenant_id")
@@ -42,193 +72,256 @@ func Save(c *gin.Context, optList ...Options) ([]*File, error) {
 		}
 	}
 
-	// Ensure multipart form is parsed (max 64MB memory before disk spill)
-	if err := c.Request.ParseMultipartForm(64 * 1024 * 1024); err != nil && !errors.Is(err, http.ErrNotMultipart) {
-		return nil, fmt.Errorf("upload: failed to parse multipart form: %w", err)
+	_ = c.Request.ParseMultipartForm(32 * 1024 * 1024)
+	headers := getFiles(c, opts.FieldName)
+	if len(headers) == 0 {
+		return nil, fmt.Errorf("upload: no file uploaded under field '%s'", opts.FieldName)
 	}
 
-	fileHeaders := extractFileHeaders(c, opts.FieldName)
-	if len(fileHeaders) == 0 {
-		return nil, fmt.Errorf("upload: no file found in request under field '%s'", opts.FieldName)
-	}
+	maxBytes := opts.MaxSizeMB * 1024 * 1024
+	var result []*File
 
-	driver, err := GetDriver()
-	if err != nil {
-		return nil, fmt.Errorf("upload: storage driver unavailable: %w", err)
-	}
-
-	ctx := c.Request.Context()
-	maxSizeBytes := opts.MaxSizeMB * 1024 * 1024
-	var uploadedFiles []*File
-
-	for _, fh := range fileHeaders {
-		// 1. Validate file size
-		if fh.Size > maxSizeBytes {
-			return nil, fmt.Errorf("upload: file '%s' exceeds maximum allowed size of %d MB", fh.Filename, opts.MaxSizeMB)
+	for _, fh := range headers {
+		if fh.Size > maxBytes {
+			return nil, fmt.Errorf("upload: file '%s' exceeds limit of %d MB", fh.Filename, opts.MaxSizeMB)
 		}
 
-		// 2. Detect content type
-		contentType := fh.Header.Get("Content-Type")
-		if contentType == "" || contentType == "application/octet-stream" {
-			contentType = detectContentType(fh)
+		cleanName := cleanFileName(fh.Filename)
+		ext := strings.ToLower(filepath.Ext(cleanName))
+
+		// Block dangerous script/executable extensions
+		if isBlocked(ext) {
+			return nil, fmt.Errorf("upload: file '%s' is not allowed for security reasons", fh.Filename)
 		}
 
-		// 3. Security checks: block executables, scripts, html
-		if IsBlockedFileType(fh.Filename, contentType) {
-			return nil, fmt.Errorf("upload: file '%s' is an executable or script and is forbidden for security", fh.Filename)
+		// Check allowed types if specified
+		if len(opts.AllowedTypes) > 0 && !isAllowed(cleanName, fh.Header.Get("Content-Type"), opts.AllowedTypes) {
+			return nil, fmt.Errorf("upload: file type of '%s' is not allowed", fh.Filename)
 		}
 
-		// 4. Validate allowed types
-		if !ValidateAllowed(fh.Filename, contentType, opts.AllowedTypes) {
-			return nil, fmt.Errorf("upload: file type of '%s' is not in the allowed list", fh.Filename)
-		}
-
-		// 5. Generate collision-resistant unique key
-		key := GenerateKey(opts.TenantID, opts.Folder, fh.Filename)
-
-		// 6. Open file stream
-		src, err := fh.Open()
+		key := buildKey(opts.TenantID, opts.Folder, cleanName)
+		fileURL, err := storeFile(c.Request.Context(), fh, key)
 		if err != nil {
-			return nil, fmt.Errorf("upload: failed to open uploaded file '%s': %w", fh.Filename, err)
+			return nil, err
 		}
 
-		// 7. Store using driver
-		err = driver.Put(ctx, key, src, fh.Size, contentType)
-		src.Close()
-		if err != nil {
-			return nil, fmt.Errorf("upload: failed to save '%s': %w", fh.Filename, err)
-		}
-
-		// 8. Build public URL
-		fileURL := driver.PublicURL(key)
-		if opts.IsPublic != nil && !*opts.IsPublic {
-			fileURL = ""
-		}
-
-		uploadedFiles = append(uploadedFiles, &File{
-			Name:        SafeFileName(fh.Filename),
-			URL:         fileURL,
-			Key:         key,
-			Size:        fh.Size,
-			ContentType: contentType,
-			UploadedAt:  time.Now().UTC(),
+		result = append(result, &File{
+			Name: cleanName,
+			URL:  fileURL,
+			Key:  key,
+			Size: fh.Size,
 		})
 	}
 
-	return uploadedFiles, nil
+	return result, nil
 }
 
-// Delete removes one or more files from storage given an array of file keys.
-func Delete(ctx context.Context, fileKeys []string) error {
-	if len(fileKeys) == 0 {
+// Delete removes an array of file keys from storage.
+func Delete(ctx context.Context, keys []string) error {
+	if len(keys) == 0 {
 		return nil
 	}
 
-	driver, err := GetDriver()
-	if err != nil {
-		return fmt.Errorf("upload: storage driver unavailable: %w", err)
+	client, bucket := getS3()
+	if client == nil || bucket == "" {
+		// Local storage deletion fallback
+		localDir := getLocalDir()
+		for _, k := range keys {
+			_ = os.Remove(filepath.Join(localDir, filepath.FromSlash(k)))
+		}
+		return nil
 	}
 
-	return driver.Delete(ctx, fileKeys)
-}
-
-// Presign generates a signed URL for direct client-to-storage upload (e.g. for large 500MB+ files).
-func Presign(c *gin.Context, opts PresignOptions) (*PresignResult, error) {
-	if opts.FileName == "" {
-		return nil, errors.New("upload: fileName is required for presigning")
-	}
-
-	if opts.Folder == "" {
-		opts.Folder = "uploads"
-	}
-	if opts.TenantID == "" && c != nil {
-		opts.TenantID = c.GetString("tenant_id")
-		if opts.TenantID == "" {
-			opts.TenantID = c.GetString("project_id")
+	var objs []types.ObjectIdentifier
+	for _, k := range keys {
+		if clean := strings.TrimSpace(k); clean != "" {
+			objs = append(objs, types.ObjectIdentifier{Key: aws.String(clean)})
 		}
 	}
-	if opts.ExpiresIn <= 0 {
-		opts.ExpiresIn = 15 * time.Minute
-	}
-	if opts.FileType == "" {
-		opts.FileType = "application/octet-stream"
-	}
 
-	if IsBlockedFileType(opts.FileName, opts.FileType) {
-		return nil, errors.New("upload: file extension or MIME type is forbidden for security")
-	}
-
-	driver, err := GetDriver()
-	if err != nil {
-		return nil, fmt.Errorf("upload: storage driver unavailable: %w", err)
-	}
-
-	key := GenerateKey(opts.TenantID, opts.Folder, opts.FileName)
-	ctx := context.Background()
-	if c != nil && c.Request != nil {
-		ctx = c.Request.Context()
-	}
-
-	uploadURL, err := driver.PresignPut(ctx, key, opts.FileType, opts.ExpiresIn)
-	if err != nil {
-		return nil, err
-	}
-
-	publicURL := driver.PublicURL(key)
-	if opts.IsPublic != nil && !*opts.IsPublic {
-		publicURL = ""
-	}
-
-	return &PresignResult{
-		UploadURL: uploadURL,
-		Key:       key,
-		URL:       publicURL,
-		ExpiresIn: int64(opts.ExpiresIn.Seconds()),
-	}, nil
+	_, err := client.DeleteObjects(ctx, &s3.DeleteObjectsInput{
+		Bucket: aws.String(bucket),
+		Delete: &types.Delete{Objects: objs, Quiet: aws.Bool(true)},
+	})
+	return err
 }
 
-// Helper: extracts file headers from request under fieldName or fallbacks
-func extractFileHeaders(c *gin.Context, fieldName string) []*multipart.FileHeader {
+// --- Internal Helpers ---
+
+func storeFile(ctx context.Context, fh *multipart.FileHeader, key string) (string, error) {
+	src, err := fh.Open()
+	if err != nil {
+		return "", fmt.Errorf("upload: cannot open file: %w", err)
+	}
+	defer src.Close()
+
+	client, bucket := getS3()
+	if client == nil || bucket == "" {
+		// Save locally if no S3 bucket configured (great for local tests & dev)
+		localDir := getLocalDir()
+		destPath := filepath.Join(localDir, filepath.FromSlash(key))
+		_ = os.MkdirAll(filepath.Dir(destPath), 0755)
+
+		dst, err := os.Create(destPath)
+		if err != nil {
+			return "", fmt.Errorf("upload: local write error: %w", err)
+		}
+		defer dst.Close()
+
+		if _, err := io.Copy(dst, src); err != nil {
+			return "", err
+		}
+		return "/uploads/" + key, nil
+	}
+
+	// Upload to S3
+	cType := fh.Header.Get("Content-Type")
+	if cType == "" {
+		cType = "application/octet-stream"
+	}
+
+	_, err = client.PutObject(ctx, &s3.PutObjectInput{
+		Bucket:        aws.String(bucket),
+		Key:           aws.String(key),
+		Body:          src,
+		ContentLength: aws.Int64(fh.Size),
+		ContentType:   aws.String(cType),
+	})
+	if err != nil {
+		return "", fmt.Errorf("upload: s3 upload error: %w", err)
+	}
+
+	if cdn := os.Getenv("PUBLIC_CDN_BASE_URL"); cdn != "" {
+		return strings.TrimRight(cdn, "/") + "/" + key, nil
+	}
+	if ep := os.Getenv("AWS_ENDPOINT"); ep != "" {
+		return fmt.Sprintf("%s/%s/%s", strings.TrimRight(ep, "/"), bucket, key), nil
+	}
+
+	region := os.Getenv("AWS_REGION")
+	if region == "" {
+		region = "us-east-1"
+	}
+	return fmt.Sprintf("https://%s.s3.%s.amazonaws.com/%s", bucket, region, key), nil
+}
+
+func getS3() (*s3.Client, string) {
+	s3InitOnce.Do(func() {
+		s3Bucket = os.Getenv("AWS_S3_BUCKET")
+		if s3Bucket == "" {
+			s3Bucket = os.Getenv("S3_BUCKET")
+		}
+		if s3Bucket == "" || os.Getenv("UPLOAD_STORAGE_DRIVER") == "local" {
+			return
+		}
+
+		region := os.Getenv("AWS_REGION")
+		if region == "" {
+			region = "us-east-1"
+		}
+
+		var opts []func(*config.LoadOptions) error
+		opts = append(opts, config.WithRegion(region))
+
+		accKey := os.Getenv("AWS_ACCESS_KEY_ID")
+		secKey := os.Getenv("AWS_SECRET_ACCESS_KEY")
+		if accKey != "" && secKey != "" {
+			opts = append(opts, config.WithCredentialsProvider(
+				credentials.NewStaticCredentialsProvider(accKey, secKey, ""),
+			))
+		}
+
+		cfg, err := config.LoadDefaultConfig(context.Background(), opts...)
+		if err != nil {
+			return
+		}
+
+		s3Client = s3.NewFromConfig(cfg, func(o *s3.Options) {
+			if ep := os.Getenv("AWS_ENDPOINT"); ep != "" {
+				o.BaseEndpoint = aws.String(ep)
+			}
+			o.UsePathStyle = os.Getenv("AWS_S3_FORCE_PATH_STYLE") == "true"
+		})
+	})
+
+	return s3Client, s3Bucket
+}
+
+func getFiles(c *gin.Context, field string) []*multipart.FileHeader {
 	if c.Request.MultipartForm == nil {
 		return nil
 	}
-
-	// 1. Check exact field name
-	if files, ok := c.Request.MultipartForm.File[fieldName]; ok && len(files) > 0 {
+	if files, ok := c.Request.MultipartForm.File[field]; ok && len(files) > 0 {
 		return files
 	}
-
-	// 2. Check common alternative names
-	alternatives := []string{"files", "upload", "attachment", "attachments", "media"}
-	for _, alt := range alternatives {
-		if files, ok := c.Request.MultipartForm.File[alt]; ok && len(files) > 0 {
-			return files
-		}
+	if files, ok := c.Request.MultipartForm.File["files"]; ok && len(files) > 0 {
+		return files
 	}
-
-	// 3. If there is only one key in the form, use its files
-	if len(c.Request.MultipartForm.File) == 1 {
-		for _, files := range c.Request.MultipartForm.File {
-			return files
-		}
+	for _, files := range c.Request.MultipartForm.File {
+		return files
 	}
-
 	return nil
 }
 
-// Helper: detects content type from first 512 bytes
-func detectContentType(fh *multipart.FileHeader) string {
-	f, err := fh.Open()
-	if err != nil {
-		return "application/octet-stream"
-	}
-	defer f.Close()
+func cleanFileName(name string) string {
+	base := filepath.Base(name)
+	ext := filepath.Ext(base)
+	nameOnly := strings.TrimSuffix(base, ext)
 
-	buf := make([]byte, 512)
-	n, _ := f.Read(buf)
-	if n == 0 {
-		return "application/octet-stream"
+	safe := safeNameRe.ReplaceAllString(nameOnly, "_")
+	if len(safe) > 50 {
+		safe = safe[:50]
 	}
+	if safe == "" {
+		safe = "file"
+	}
+	return safe + strings.ToLower(ext)
+}
 
-	return http.DetectContentType(buf[:n])
+func buildKey(tenant, folder, filename string) string {
+	cleanFolder := safeNameRe.ReplaceAllString(strings.TrimSpace(folder), "-")
+	if cleanFolder == "" {
+		cleanFolder = "uploads"
+	}
+	now := time.Now().UTC()
+	uid := uuid.New().String()[:8] // Short unique collision prefix
+
+	if tenant = strings.TrimSpace(tenant); tenant != "" {
+		cleanTenant := safeNameRe.ReplaceAllString(tenant, "-")
+		return fmt.Sprintf("projects/%s/%s/%s/%s/%s_%s", cleanTenant, cleanFolder, now.Format("2006"), now.Format("01"), uid, filename)
+	}
+	return fmt.Sprintf("%s/%s/%s/%s_%s", cleanFolder, now.Format("2006"), now.Format("01"), uid, filename)
+}
+
+func isBlocked(ext string) bool {
+	blocked := map[string]bool{
+		".exe": true, ".bat": true, ".sh": true, ".php": true, ".py": true,
+		".rb": true, ".js": true, ".html": true, ".htm": true, ".svg": true,
+		".cmd": true, ".dll": true, ".so": true,
+	}
+	return blocked[ext]
+}
+
+func isAllowed(filename, ctype string, allowed []string) bool {
+	ext := strings.ToLower(filepath.Ext(filename))
+	normMime := strings.ToLower(strings.TrimSpace(ctype))
+
+	for _, a := range allowed {
+		a = strings.ToLower(strings.TrimSpace(a))
+		if a == ext || "."+a == ext || a == normMime {
+			return true
+		}
+		if strings.HasSuffix(a, "/*") && strings.HasPrefix(normMime, strings.TrimSuffix(a, "/*")+"/") {
+			return true
+		}
+	}
+	return false
+}
+
+func getLocalDir() string {
+	dir := os.Getenv("UPLOAD_LOCAL_PATH")
+	if dir == "" {
+		dir = "./uploads"
+	}
+	return dir
 }

@@ -18,7 +18,8 @@ import (
 func setupTestRouter() (*gin.Engine, string) {
 	gin.SetMode(gin.TestMode)
 	tmpDir, _ := os.MkdirTemp("", "upload_test_*")
-	upload.SetDriver(upload.NewLocalDriver(tmpDir))
+	os.Setenv("UPLOAD_LOCAL_PATH", tmpDir)
+	os.Setenv("UPLOAD_STORAGE_DRIVER", "local")
 	r := gin.New()
 	return r, tmpDir
 }
@@ -70,7 +71,7 @@ func TestUploadSave_SingleFile(t *testing.T) {
 		t.Fatalf("unexpected error: %v", saveErr)
 	}
 	if len(savedFiles) != 1 {
-		t.Fatalf("expected 1 file, got %d", len(savedFiles))
+		t.Fatalf("expected 1 file in array, got %d", len(savedFiles))
 	}
 
 	f := savedFiles[0]
@@ -161,7 +162,7 @@ func TestUploadSave_RejectsBlockedExtensions(t *testing.T) {
 	if saveErr == nil {
 		t.Fatalf("expected error for .sh file, got nil")
 	}
-	if !strings.Contains(saveErr.Error(), "executable or script") {
+	if !strings.Contains(saveErr.Error(), "not allowed for security") {
 		t.Errorf("unexpected error message: %v", saveErr)
 	}
 }
@@ -188,7 +189,7 @@ func TestUploadSave_RejectsOversizedFile(t *testing.T) {
 	if saveErr == nil {
 		t.Fatalf("expected error for oversized file, got nil")
 	}
-	if !strings.Contains(saveErr.Error(), "exceeds maximum allowed size") {
+	if !strings.Contains(saveErr.Error(), "exceeds limit") {
 		t.Errorf("unexpected error message: %v", saveErr)
 	}
 }
@@ -197,7 +198,6 @@ func TestUploadDelete_ArrayOfKeys(t *testing.T) {
 	_, tmpDir := setupTestRouter()
 	defer os.RemoveAll(tmpDir)
 
-	// Create dummy files locally
 	key1 := "uploads/file1.txt"
 	key2 := "uploads/file2.txt"
 
@@ -208,7 +208,6 @@ func TestUploadDelete_ArrayOfKeys(t *testing.T) {
 	_ = os.WriteFile(full1, []byte("content1"), 0644)
 	_ = os.WriteFile(full2, []byte("content2"), 0644)
 
-	// Delete both using array of keys
 	err := upload.Delete(context.Background(), []string{key1, key2})
 	if err != nil {
 		t.Fatalf("unexpected delete error: %v", err)
@@ -219,34 +218,5 @@ func TestUploadDelete_ArrayOfKeys(t *testing.T) {
 	}
 	if _, err := os.Stat(full2); !os.IsNotExist(err) {
 		t.Errorf("expected file2 to be deleted")
-	}
-}
-
-func TestUploadPresign(t *testing.T) {
-	r, tmpDir := setupTestRouter()
-	defer os.RemoveAll(tmpDir)
-
-	var presignRes *upload.PresignResult
-	var presignErr error
-
-	r.GET("/presign", func(c *gin.Context) {
-		presignRes, presignErr = upload.Presign(c, upload.PresignOptions{
-			FileName: "video.mp4",
-			FileType: "video/mp4",
-			Folder:   "media",
-			TenantID: "crm-app",
-		})
-		c.Status(http.StatusOK)
-	})
-
-	req := httptest.NewRequest("GET", "/presign", nil)
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
-
-	if presignErr != nil {
-		t.Fatalf("unexpected presign error: %v", presignErr)
-	}
-	if !strings.HasPrefix(presignRes.Key, "projects/crm-app/media/") {
-		t.Errorf("unexpected presign key: %s", presignRes.Key)
 	}
 }

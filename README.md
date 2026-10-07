@@ -39,7 +39,6 @@ The `upload` engine works identically to `table`—it is an importable Go packag
 
 * **`upload.Save(c, opts)`**: Single method that handles both single and multiple file uploads, and **always returns an array** of `*upload.File`.
 * **`upload.Delete(ctx, fileKeys)`**: Takes an **array of file keys** (`[]string`) and deletes them in one call.
-* **`upload.Presign(c, opts)`**: Generates direct-to-S3 signed PUT URLs for large files (100MB+).
 
 ```go
 package controllers
