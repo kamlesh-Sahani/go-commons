@@ -11,10 +11,10 @@
 
 | Package | What it does | Example Use Case |
 | :--- | :--- | :--- |
+| **`upload`** | Universal storage & file upload engine (S3, MinIO, R2, Local) | `upload.Save(c, opts)` handles single/multiple uploads & returns an array |
 | **`table`** | Universal table engine (Postgres, MySQL, Mongo, Slices) | Pagination, search, column filters & streaming Excel/CSV export |
 | **`response`** | Standard JSON responses | One-line `response.Success(c, "OK", data)` or `response.BadRequest(...)` |
 | **`utils`** | Form validation, currency, dates, strings | `notblank` validator, cents-to-dollars math, ISO date parsing |
-| **`sdk`** | Client for the hosted S3 upload service | Confirm an uploaded invoice or avatar in 2 lines |
 | **`middleware`** | Production Gin middlewares | CORS, rate limiting (100 req/s), panic recovery, body size guard |
 | **`crypto`** | Password hashing & encryption | Bcrypt password hashing & AES-256-GCM data encryption |
 | **`queue`** | RabbitMQ manager & consumer workers | Publish JSON events and run resilient background workers |
@@ -33,7 +33,63 @@ go get github.com/kamlesh-Sahani/go-commons
 
 ## 📖 Feature Guide with Simple Examples
 
-### 1. 📊 Universal Table Engine (`table`)
+### 1. 📤 Universal Upload Engine (`upload`)
+
+The `upload` engine works identically to `table`—it is an importable Go package that runs in-process inside your Gin app. It works seamlessly with **AWS S3, MinIO, Cloudflare R2, and Local Disk**.
+
+* **`upload.Save(c, opts)`**: Single method that handles both single and multiple file uploads, and **always returns an array** of `*upload.File`.
+* **`upload.Delete(ctx, fileKeys)`**: Takes an **array of file keys** (`[]string`) and deletes them in one call.
+* **`upload.Presign(c, opts)`**: Generates direct-to-S3 signed PUT URLs for large files (100MB+).
+
+```go
+package controllers
+
+import (
+	"github.com/gin-gonic/gin"
+	"github.com/kamlesh-Sahani/go-commons/response"
+	"github.com/kamlesh-Sahani/go-commons/upload"
+)
+
+// 1. Upload files (Single or Multiple - always returns an array!)
+func UploadInvoices(c *gin.Context) {
+	files, err := upload.Save(c, upload.Options{
+		Folder:       "invoices",
+		MaxSizeMB:    10,                                       // 10MB per file limit
+		AllowedTypes: []string{"application/pdf", "image/png"}, // Only PDFs and PNGs
+	})
+	if err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
+
+	// files is []*upload.File
+	// For 1 file: files[0].URL, files[0].Key, files[0].Size
+	// For multiple files: iterate over files
+	response.Success(c, "Files uploaded successfully", files)
+}
+
+// 2. Delete files (Expects an array of keys)
+func DeleteFiles(c *gin.Context) {
+	var req struct {
+		Keys []string `json:"keys" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "Invalid keys")
+		return
+	}
+
+	if err := upload.Delete(c.Request.Context(), req.Keys); err != nil {
+		response.InternalServerError(c, "Failed to delete files")
+		return
+	}
+
+	response.Success(c, "Files deleted successfully", nil)
+}
+```
+
+---
+
+### 2. 📊 Universal Table Engine (`table`)
 
 The `table` engine is an enterprise data table pipeline that powers dynamic data grids (React, Vue, Angular, mobile) with pagination, multi-field search, column filters, and zero-memory streaming exports. It is completely **database-agnostic** and works seamlessly with **PostgreSQL, MySQL, SQLite, MongoDB, and in-memory slices**.
 
@@ -453,49 +509,7 @@ utils.TimeAgo(time.Now().Add(-2*time.Hour)) // "2 hours ago"
 
 ---
 
-### 4. 📦 File Upload Client SDK (`sdk`)
-
-When a user uploads a file (e.g. invoice PDF, product picture, avatar), your backend communicates with the hosted upload service using the client SDK:
-
-```go
-import "github.com/kamlesh-Sahani/go-commons/sdk"
-
-// 1. Initialize client once
-var uploadClient = sdk.NewClient("https://upload-api.yourcompany.com", "your_secret_api_key")
-
-// 2. Request a 15-minute presigned upload URL for the frontend:
-func GetUploadURL(c *gin.Context) {
-    res, err := uploadClient.GetPresignedUpload(c.Request.Context(), sdk.UploadRequest{
-        FileName:    "invoice_101.pdf",
-        ContentType: "application/pdf",
-        Folder:      "invoices",
-        MaxBytes:    10 * 1024 * 1024, // 10MB limit
-    })
-    if err != nil {
-        response.InternalServerError(c, "Failed to get upload URL")
-        return
-    }
-    response.Success(c, "Upload URL generated", res)
-}
-
-// 3. Confirm file upload after the frontend finishes uploading:
-func SaveInvoice(c *gin.Context) {
-    fileKey := c.PostForm("fileKey") // e.g. "projects/billing/invoices/abc123_invoice_101.pdf"
-
-    // Confirm upload in 1 line (marks file status as confirmed in S3 so it is never deleted):
-    res, err := uploadClient.Confirm(c.Request.Context(), fileKey)
-    if err != nil {
-        response.InternalServerError(c, "Upload confirmation failed")
-        return
-    }
-
-    response.Created(c, "Invoice saved successfully", res)
-}
-```
-
----
-
-### 5. 🛡️ Security Middlewares (`middleware`)
+### 4. 🛡️ Security Middlewares (`middleware`)
 
 Drop-in middlewares for Gin routers:
 
@@ -512,7 +526,7 @@ router.Use(middleware.RateLimiter(100, time.Second)) // 100 requests/sec sliding
 
 ---
 
-### 6. 🔐 Password Hashing & Encryption (`crypto`)
+### 5. 🔐 Password Hashing & Encryption (`crypto`)
 
 ```go
 import "github.com/kamlesh-Sahani/go-commons/crypto"
@@ -532,7 +546,7 @@ token, _ := crypto.GenerateRandomHex(32) // 64-character secure random hex
 
 ---
 
-### 7. 🐇 RabbitMQ Queue (`queue`)
+### 6. 🐇 RabbitMQ Queue (`queue`)
 
 Thread-safe message publishing and resilient background workers with automatic Ack/Nack:
 
@@ -558,74 +572,35 @@ err = rmq.StartConsumer(ctx, "invoice_queue", 10, func(ctx context.Context, body
 
 ---
 
-## 🚀 Running the Hosted Upload API Server
+---
 
-If you want to run the dedicated file upload microservice:
+## 🏃 Running Examples
 
-### 1. Configuration (`.env`)
-```env
-PORT=8080
-ENV=development
+To test the package locally:
 
-# Storage / S3 / MinIO Configuration
-AWS_REGION=us-east-1
-AWS_ACCESS_KEY_ID=your_aws_access_key
-AWS_SECRET_ACCESS_KEY=your_aws_secret_key
-AWS_S3_BUCKET=your-media-bucket
-
-# Optional: MinIO local development
-# AWS_ENDPOINT=http://localhost:9000
-# AWS_S3_FORCE_PATH_STYLE=true
-
-# API Key Authentication
-AUTH_ENABLED=true
-API_KEYS=billing_secret_key:billing-project,crm_secret_key:crm-project
-```
-
-### 2. Start the Server
 ```bash
-# Direct run
-go run ./cmd/server
-
-# Or with Docker Compose (includes MinIO & RabbitMQ)
+# Start MinIO & RabbitMQ (optional, for local S3 & queue testing)
 docker compose up -d
+
+# Run the example server
+go run ./examples
 ```
-
-### 3. Server Endpoints
-
-| Method | Endpoint | Description |
-| :--- | :--- | :--- |
-| `POST` | `/api/v1/upload/presigned-url` | Generates 15-minute S3 upload URL; tags object as `status=pending` |
-| `POST` | `/api/v1/upload/confirm` | Confirms upload; changes tag to `status=confirmed` |
-| `POST` | `/api/v1/upload/presigned-download-url` | Generates temporary signed download URL for private files |
-| `GET`  | `/api/v1/upload/info?key=...` | Retrieves file size, content-type, and metadata |
-| `DELETE`| `/api/v1/upload?key=...` | Deletes file from S3 |
-| `POST` | `/api/v1/upload/batch-delete` | Deletes multiple files in one request |
 
 ---
 
-## 🔒 Security Architecture
+## 📦 Package Architecture
 
 ```
 github.com/kamlesh-Sahani/go-commons
-├── internal/                 🔒 PRIVATE TO SERVER (Cannot be imported outside!)
-│   ├── storage/              # Master S3 credentials, presigning logic
-│   ├── handlers/             # Server HTTP controllers
-│   └── routes/               # API route definitions
-│
-├── cmd/server/               # 🚀 Standalone Upload Microservice
-│
-└── public packages           📦 REUSABLE GO MODULE (Importable by your projects)
-    ├── table/                # Universal table engine (Postgres, MySQL, Mongo, Slices)
-    ├── response/             # Standard JSON responses
-    ├── utils/                # Validators, currency, date math
-    ├── sdk/                  # Client SDK to call the upload service
-    ├── middleware/           # CORS, rate limiter, panic recovery
-    ├── crypto/               # Bcrypt & AES-256-GCM
-    └── queue/                # RabbitMQ publisher & worker loop
+├── upload/       📤 Universal file upload & storage (S3, MinIO, R2, Local)
+├── table/        📊 Universal table engine (Postgres, MySQL, Mongo, Slices)
+├── response/     💬 Standard JSON responses
+├── middleware/   🛡️ CORS, rate limiting, panic recovery, body size guard
+├── utils/        🔍 Validators, currency, date math
+├── crypto/       🔐 Bcrypt, Argon2id & AES-256-GCM
+├── queue/        🐇 RabbitMQ publisher & worker loop
+└── examples/     💡 Plug-and-play examples
 ```
-
-Because master S3 credentials and upload handlers are placed inside the **`internal/`** directory, the Go compiler strictly blocks other projects from importing them. Your master AWS credentials can never leak into consumer projects.
 
 ---
 

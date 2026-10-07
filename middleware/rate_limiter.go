@@ -76,10 +76,11 @@ func RateLimiterWithContext(ctx context.Context, maxRequests int, window time.Du
 	}()
 
 	return func(c *gin.Context) {
-		// Anchor by ClientIP to prevent unauthenticated spoofed X-API-Key from bypassing IP limits
 		clientKey := "ip:" + c.ClientIP()
-		if pid := GetProjectID(c); pid != "" && pid != "default" {
+		if pid := c.GetString("project_id"); pid != "" && pid != "default" {
 			clientKey = "proj:" + pid
+		} else if tid := c.GetString("tenant_id"); tid != "" && tid != "default" {
+			clientKey = "tenant:" + tid
 		}
 
 		now := time.Now()

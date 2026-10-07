@@ -9,8 +9,8 @@ import (
 	"github.com/kamlesh-Sahani/go-commons/crypto"
 	"github.com/kamlesh-Sahani/go-commons/middleware"
 	"github.com/kamlesh-Sahani/go-commons/response"
-	"github.com/kamlesh-Sahani/go-commons/sdk"
 	"github.com/kamlesh-Sahani/go-commons/table"
+	"github.com/kamlesh-Sahani/go-commons/upload"
 )
 
 type Company struct {
@@ -30,35 +30,33 @@ func main() {
 	router.Use(middleware.CORS())
 	router.Use(middleware.RateLimiter(100, time.Second))
 
-	// 2. Initialize Common API SDK (Talks to the hosted common API microservice)
-	commonClient := sdk.NewClient("http://localhost:8080", "acc_dev_secret_key")
-
-	// 3. Example File Confirmation Route
-	router.POST("/api/invoices", func(c *gin.Context) {
-		type InvoiceForm struct {
-			ClientName string `json:"clientName" binding:"required"`
-			Amount     int    `json:"amount" binding:"required"`
-			FileKey    string `json:"fileKey" binding:"required"`
-		}
-
-		var form InvoiceForm
-		if err := c.ShouldBindJSON(&form); err != nil {
-			response.BadRequest(c, "Invalid invoice form: "+err.Error())
-			return
-		}
-
-		// 1-line confirmation to Common API via SDK!
-		confirmRes, err := commonClient.Confirm(c.Request.Context(), form.FileKey)
-		if err != nil {
-			response.InternalServerError(c, "Failed to confirm file upload: "+err.Error())
-			return
-		}
-
-		response.Created(c, "Invoice created successfully", gin.H{
-			"clientName": form.ClientName,
-			"amount":     form.Amount,
-			"attachment": confirmRes,
+	// 2. Universal File Upload (upload.Save handles single & multiple files, returns an array)
+	router.POST("/api/upload", func(c *gin.Context) {
+		files, err := upload.Save(c, upload.Options{
+			Folder:    "invoices",
+			MaxSizeMB: 10,
 		})
+		if err != nil {
+			response.BadRequest(c, err.Error())
+			return
+		}
+		response.Success(c, "Files uploaded successfully", files)
+	})
+
+	// 3. File Deletion (upload.Delete expects an array of file keys)
+	router.POST("/api/upload/delete", func(c *gin.Context) {
+		var req struct {
+			Keys []string `json:"keys" binding:"required"`
+		}
+		if err := c.ShouldBindJSON(&req); err != nil {
+			response.BadRequest(c, "Invalid request keys")
+			return
+		}
+		if err := upload.Delete(c.Request.Context(), req.Keys); err != nil {
+			response.InternalServerError(c, err.Error())
+			return
+		}
+		response.Success(c, "Files deleted successfully", nil)
 	})
 
 	// 4. Example Database-Agnostic Table (Works with PostgreSQL / pgx / GORM)
